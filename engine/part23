@@ -1,0 +1,196 @@
+[piece(side, t)];
+                if (x) { int sq = __builtin_ctzll(x); int val = pieceVal[t]; if (val < bestVal) { bestVal = val; bestSq = sq; bestType = t; } }
+            }
+            if (bestSq < 0) break;
+            ++d;
+            gain[d] = capturedValue - gain[d-1];
+            if (std::max(-gain[d-1], gain[d]) < 0 && d > 1) break;
+            pc[piece(side, bestType)] ^= bb(bestSq);
+            occ ^= bb(bestSq);
+            int moving = piece(side, bestType);
+            pc[moving] |= bb(to);
+            // The previously occupying side's piece on 'to' is removed by replacing it.
+            for (int t = PAWN; t <= KING; ++t) {
+                int opp = side ^ 1, pt = piece(opp, t);
+                if (pc[pt] & bb(to)) pc[pt] ^= bb(to);
+            }
+            occ |= bb(to);
+            capturedValue = pieceVal[bestType];
+        }
+        while (d) gain[d-1] = -std::max(-gain[d-1], gain[d]);
+        return gain[0];
+    }
+
+    int pieceVal[6]={100,320,330,500,900,0};
+    const int mgPst[6][64] = {
+        {0,0,0,0,0,0,0,0,5,8,8,-15,-15,8,8,5,4,-4,-8,0,0,-8,-4,4,0,0,0,15,15,0,0,0,5,5,10,20,20,10,5,5,10,10,18,28,28,18,10,10,40,45,48,55,55,48,45,40,0,0,0,0,0,0,0,0},
+        {-50,-40,-30,-30,-30,-30,-40,-50,-40,-20,0,5,5,0,-20,-40,-30,5,10,15,15,10,-5,-30,-30,0,15,20,20,15,0,-30,-30,5,15,20,20,15,5,-30,-30,0,10,15,15,10,0,-30,-40,-20,0,0,0,0,-20,-40,-50,-40,-30,-30,-30,-30,-40,-50},
+        {-20,-10,-10,-10,-10,-10,-10,-20,-10,5,0,0,0,0,5,-10,-10,10,10,10,10,10,10,-10,-10,0,10,10,10,10,0,-10,-10,5,5,10,10,5,5,-10,-10,0,5,10,10,5,0,-10,-10,0,0,0,0,0,0,-10,-20,-10,-10,-10,-10,-10,-10,-20},
+        {0,0,0,5,5,0,0,0,-5,0,0,0,0,0,0,-5,-5,0,0,0,0,0,0,-5,-5,0,0,0,0,0,0,-5,-5,0,0,0,0,0,0,-5,5,10,10,10,10,10,10,5,0,0,0,0,0,0,0,0},
+        {-20,-10,-10,0,0,-10,-10,-20,-10,0,5,0,0,0,0,-10,-10,5,5,5,5,5,0,-10,0,0,5,5,5,5,0,-5,-5,0,5,5,5,5,0,-5,-10,0,5,5,5,5,0,-10,-10,0,0,0,0,0,-10,-20,-10,-10,0,0,-10,-10,-20},
+        {-40,-50,-50,-60,-60,-50,-50,-40,-40,-50,-50,-60,-60,-50,-50,-40,-30,-40,-50,-60,-60,-50,-40,-30,-20,-30,-40,-50,-50,-40,-30,-20,-10,-20,-30,-30,-30,-30,-20,-10,20,20,0,0,0,0,20,20,30,40,20,10,10,20,40,30,40,50,30,20,20,30,50,40}
+    };
+    int eval(){
+        int mg=0,eg=0,phase=0, pawFileW[8]{},pawFileB[8]{};U64 all=b.all;
+        for(int p=0;p<12;p++){int c=p/6,t=p%6,sg=c==WHITE?1:-1;U64 x=b.pieces[p];while(x){int s=poplsb(x);
+            int r=(c==WHITE?rankOf(s):7-rankOf(s)),f=fileOf(s);mg+=sg*(pieceVal[t]+mgPst[t][r*8+f]);
+            eg+=sg*pieceVal[t];phase+=t==PAWN?0:t==KNIGHT||t==BISHOP?1:t==ROOK?2:t==QUEEN?4:0;
+            if(t==PAWN)(c==WHITE?pawFileW[f]:pawFileB[f])++;
+        }}
+        if(phase>24)phase=24;int score=(mg*phase + eg*(24-phase))/24;
+        if(__builtin_popcountll(b.pieces[piece(WHITE,BISHOP)])>=2)score+=30;if(__builtin_popcountll(b.pieces[piece(BLACK,BISHOP)])>=2)score-=30;
+        for(int f=0;f<8;f++){
+            if(pawFileW[f]>1)score-=12*(pawFileW[f]-1);if(pawFileB[f]>1)score+=12*(pawFileB[f]-1);
+            if(pawFileW[f]&&(f==0||!pawFileW[f-1])&&(f==7||!pawFileW[f+1]))score-=8;
+            if(pawFileB[f]&&(f==0||!pawFileB[f-1])&&(f==7||!pawFileB[f+1]))score+=8;
+        }
+        int mw=0,mb=0;for(int c=0;c<2;c++){U64 kn=b.pieces[piece(c,KNIGHT)];while(kn){int s=poplsb(kn);int n=__builtin_popcountll(T.knight[s]&~b.occ[c]);(c?mb:mw)+=n;}U64 bi=b.pieces[piece(c,BISHOP)];while(bi){int s=poplsb(bi);(c?mb:mw)+=__builtin_popcountll(T.bishop(s,b.all)&~b.occ[c]);}U64 ro=b.pieces[piece(c,ROOK)];while(ro){int s=poplsb(ro);(c?mb:mw)+=__builtin_popcountll(T.rook(s,b.all)&~b.occ[c]);}}
+        score += 2*(mw-mb);
+        return b.side==WHITE?score:-score;
+    }
+    int mscore(Move m,int ply,U32 ttMove=0, U32 prev=0,bool useSee=true){int from=mvFrom(m),to=mvTo(m),t=b.mailbox[from];int cap=b.mailbox[to];int s=0;if(m.v==ttMove)s+=20000000;if(mvFlags(m)&MF_EP){cap=piece(b.side^1,PAWN);s+=1000000+10000-pieceVal[typeOf(t)];}else if(cap!=EMPTY){int sv=useSee?see(m):0;s+=1000000+10*pieceVal[typeOf(cap)]-pieceVal[typeOf(t)]+sv*32;}if(mvPromo(m))s+=800000+pieceVal[mvPromo(m)-1]*10;if(!(mvFlags(m)&(MF_EP|MF_CASTLE))&&cap==EMPTY){if(killers[ply][0]==m.v)s+=800000;else if(killers[ply][1]==m.v)s+=700000;s+=history[b.side][from][to];if(prev){Move pm{prev,0};if(countermove[mvFrom(pm)][mvTo(pm)]==m.v)s+=12000;}}return s;}
+    void order(std::array<Move,MAX_MOVES>&mv,int n,int ply,U32 ttMove=0,U32 prev=0,bool useSee=false){for(int i=0;i<n;i++)mv[i].score=mscore(mv[i],ply,ttMove,prev,useSee);std::sort(mv.begin(),mv.begin()+n,[](const Move&a,const Move&b){return a.score>b.score;});}
+    bool timeout(){if(stop)return true;if((nodes & 4095ULL)!=0) return false; if(timeMs>0){auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();if(ms>=timeMs){stop=true;return true;}}return false;}
+    bool nonPawnMaterial(int c)const{return (b.pieces[piece(c,KNIGHT)]|b.pieces[piece(c,BISHOP)]|b.pieces[piece(c,ROOK)]|b.pieces[piece(c,QUEEN)])!=0;}
+    int qsearch(int alpha,int beta,int ply){
+        if(timeout())return 0; ++nodes; ++qnodes;
+        if(ply>=MAX_PLY-4) return eval();
+        bool chk=b.inCheck(b.side);
+        if(!chk){int stand=eval();if(stand>=beta)return stand;if(stand>alpha)alpha=stand;}
+        std::array<Move,MAX_MOVES> mv{};int n=0;
+        b.gen(chk?false:true,[&](Move m){if(n<MAX_MOVES)mv[n++]=m;});
+        order(mv,n,ply,0,0,false);
+        for(int i=0;i<n;i++){
+            Move m=mv[i];int to=mvTo(m);int cap=(mvFlags(m)&MF_EP)?piece(b.side^1,PAWN):b.mailbox[to];
+            if(!chk && cap==EMPTY && mvPromo(m)==0) continue;
+            b.make(m);if(b.inCheck(b.side^1)){b.unmake();continue;}
+            int sc=-qsearch(-beta,-alpha,ply+1);b.unmake();
+            if(sc>=beta)return sc;if(sc>alpha)alpha=sc;
+        }
+        return alpha;
+    }
+
+    int search(int depth,int alpha,int beta,int ply,bool pv=true,bool allowNull=true,U32 prev=0,U32 skipMove=0){
+        if(timeout())return 0;
+        ++nodes;
+        bool root=(ply==0);
+        const U64 key=b.hash();
+        auto &bucket=tt[key&(TT_SIZE-1)]; TTEntry* pe=nullptr; TTEntry* empty=nullptr; int minDepth=999; TTEntry* repl=&bucket[0];
+        for(auto &x:bucket){
+            if(x.key==key){pe=&x;break;} if(!x.key&&!empty)empty=&x; if(x.depth<minDepth){minDepth=x.depth;repl=&x;}
+        }
+        TTEntry* e=pe; U32 ttMove=e?e->move:0;
+        if(e&&e->depth>=depth&&!root){int sc=e->score;sc=sc>MATE-1000?sc-ply:sc< -MATE+1000?sc+ply:sc;if(e->bound==0)return sc;if(e->bound==1&&sc<=alpha)return sc;if(e->bound==2&&sc>=beta)return sc;}
+        bool in=b.inCheck(b.side);
+        if(depth<=0)return qsearch(alpha,beta,ply);
+        if(in) ++depth;
+
+        int staticEval=eval();
+        if(!pv&&!in&&depth<=3&&staticEval+120*depth<=alpha) return qsearch(alpha,beta,ply);
+        if(!pv&&!in&&depth==1&&staticEval-220>=beta)return staticEval;
+
+        if(allowNull&&depth>=3&&!pv&&!in&&nonPawnMaterial(b.side)&&beta-alpha==1&&staticEval>=beta-100){
+            int R=2+(depth>=8); int oldEp=b.ep; U64 oldHash=b.hkey;
+            if(b.ep>=0)b.hkey^=Z.ep[fileOf(b.ep)]; b.ep=-1; b.side^=1; b.hkey^=Z.side;
+            int sc=-search(depth-1-R,-beta,-beta+1,ply+1,false,false,0);
+            b.side^=1; b.hkey=oldHash; b.ep=oldEp;
+            if(sc>=beta)return sc;
+        }
+
+        bool singular=false;
+        if(false && ttMove&&e&&e->depth>=depth&&depth>=6&&ttMove!=skipMove){
+            int singularBeta=(e->score>MATE-1000?e->score-ply:e->score)+24;
+            int other=-INF;
+            std::array<Move,MAX_MOVES> probe{}; int pn=0;
+            b.gen(false,[&](Move m){if(m.v!=ttMove && pn<MAX_MOVES)probe[pn++]=m;});
+            order(probe,pn,ply,0,prev);
+            int lim=std::min(pn,6);
+            for(int i=0;i<lim;i++){b.make(probe[i]);if(!b.inCheck(b.side^1))other=std::max(other,-search(depth/2,-singularBeta,-singularBeta+1,ply+1,false,true,probe[i].v));b.unmake();if(other>=singularBeta)break;}
+            singular = other < singularBeta;
+        }
+
+        std::array<Move,MAX_MOVES> mv{};int n=0;
+        b.gen(false,[&](Move m){if(m.v!=skipMove && n<MAX_MOVES)mv[n++]=m;});
+        order(mv,n,ply,ttMove,prev);
+        if(n==0)return in?-MATE+ply:0;
+        int bestScore=-INF,origAlpha=alpha;U32 bestMove=0;bool first=true;int searchedQuiet=0;
+        for(int i=0;i<n;i++){
+            Move m=mv[i]; int from=mvFrom(m),to=mvTo(m); bool capture=(b.mailbox[to]!=EMPTY)||(mvFlags(m)&MF_EP); bool quiet=!capture&&!mvPromo(m);
+            b.make(m); if(b.inCheck(b.side^1)){b.unmake();continue;}
+            int ext=0;
+            if(depth>=3 && (ply&3)==0 && b.inCheck(b.side)) ext=1;
+            int nd=depth-1+ext; int sc;
+            if(!first){
+                bool reducible=(depth>=3&&i>=3&&quiet&&!mvPromo(m));
+                int R=0;
+                if(reducible){R=1;if(depth>=7&&i>=8)R++;if(depth>=11&&i>=16)R++;if(history[b.side^1][from][to]<0)R++;}
+                sc=-search(nd-R,-alpha-1,-alpha,ply+1,false,true,m.v);
+                if(R&&sc>alpha) sc=-search(nd,-alpha-1,-alpha,ply+1,false,true,m.v);
+                if(sc>alpha&&sc<beta) sc=-search(nd,-beta,-alpha,ply+1,true,true,m.v);
+            } else sc=-search(nd,-beta,-alpha,ply+1,true,true,m.v);
+            b.unmake();
+            if(timeout())break;
+            if(sc>bestScore){bestScore=sc;bestMove=m.v;}
+            if(sc>alpha){
+                alpha=sc;
+                if(alpha>=beta){
+                    if(quiet){
+                        Move pm{prev,0};
+                        if(killers[ply][0]!=m.v){killers[ply][1]=killers[ply][0];killers[ply][0]=m.v;}
+                        updateHistory(history[b.side][from][to],depth*depth*2);
+                        if(prev)countermove[mvFrom(pm)][mvTo(pm)]=m.v;
+                        for(int j=0;j<i;j++){Move q=mv[j];int qf=mvFrom(q),qt=mvTo(q);if(b.mailbox[qf]!=EMPTY&&b.mailbox[qt]==EMPTY)updateHistory(history[b.side][qf][qt],-depth*depth);}
+                    }
+                    break;
+                }
+            }
+            first=false; if(quiet)++searchedQuiet;
+        }
+        if(bestMove==0)return bestScore;
+        int bound=bestScore<=origAlpha?1:(bestScore>=beta?2:0);
+        TTEntry *dst=pe?pe:(empty?empty:repl);dst->key=key;dst->depth=depth;dst->bound=bound;dst->move=bestMove;
+        dst->score=(bestScore>MATE-1000?bestScore+ply:bestScore< -MATE+1000?bestScore-ply:bestScore);
+        return bestScore;
+    }
+
+    Move think(int depth,int ms){
+        stop=false;timeMs=ms;nodes=qnodes=tthits=0;t0=std::chrono::steady_clock::now();Move best{};int prevScore=0;
+        for(int d=1;d<=depth&&!stop;d++){
+            int window=d>=5?50:INF; int alpha=d>=5?prevScore-window:-INF; int beta=d>=5?prevScore+window:INF;
+            for(;;){
+                std::array<Move,MAX_MOVES> mv{};int n=0;b.gen(false,[&](Move m){if(n<MAX_MOVES)mv[n++]=m;});
+                U32 rootTT=0;auto &bucket=tt[b.hash()&(TT_SIZE-1)];for(auto &x:bucket)if(x.key==b.hash()){rootTT=x.move;break;}order(mv,n,0,rootTT);
+                int localA=alpha,bs=-INF;Move bm{};
+                for(int i=0;i<n;i++){b.make(mv[i]);int sc=-search(d-1,-beta,-localA,1,true,true,mv[i].v);b.unmake();if(stop)break;if(sc>bs){bs=sc;bm=mv[i];}if(sc>localA)localA=sc;}
+                if(stop)break;
+                if(bs<=alpha&&alpha>-INF+1){window*=2;alpha=bs-window;beta=bs+10;continue;}
+                if(bs>=beta&&beta<INF-1){window*=2;alpha=bs-10;beta=bs+window;continue;}
+                best=bm;prevScore=bs;
+                std::cerr<<"info depth "<<d<<" score cp "<<bs<<" nodes "<<nodes<<" nps "<<nps()<<" hashfull "<<hashFull()<<" pv "<<uci(best)<<"\n";
+                break;
+            }
+        }
+        return best;
+    }
+
+    uint64_t nps()const{auto ms=std::max<long long>(1,std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count());return nodes*1000ULL/ms;}
+    int hashFull()const{int n=0;for(int i=0;i<250;i++){for(auto &e:tt[i])if(e.key)n++;}return n;}
+};
+
+void init(){T.init();Z.init();}
+
+void bench(){
+    Board b;b.setFEN(Board::startFen());
+    const uint64_t sp[]={1,20,400,8902,197281};
+    std::cout<<"EternalPhoenix Bitboard benchmark\n";
+    for(int d=1;d<=4;d++){auto t=std::chrono::steady_clock::now();uint64_t n=b.perft(d);auto ms=std::max<long long>(1,std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t).count());std::cout<<"startpos perft("<<d<<") "<<n<<" expected "<<sp[d]<<" "<<(n==sp[d]?"PASS":"FAIL")<<" time="<<ms<<"ms nps="<<n*1000ULL/ms<<"\n";}
+    const char* kiwi="r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";b.setFEN(kiwi);const uint64_t kp[]={1,48,2039,97862,4085603};for(int d=1;d<=3;d++){auto t=std::chrono::steady_clock::now();uint64_t n=b.perft(d);auto ms=std::max<long long>(1,std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t).count());std::cout<<"kiwipete perft("<<d<<") "<<n<<" expected "<<kp[d]<<" "<<(n==kp[d]?"PASS":"FAIL")<<" time="<<ms<<"ms nps="<<n*1000ULL/ms<<"\n";}
+    std::vector<std::string> pos={Board::startFen(),kiwi,"rnbq1k1r/ppp1bppp/5n2/8/2B5/2N5/PPPP1PPP/R1BQK2R w KQ - 4 7"};
+    for(auto &fen:pos){Engine e;e.b.setFEN(fen);auto st=std::chrono::steady_clock::now();auto m=e.think(6,1000);auto ms=std::max<long long>(1,std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-st).count());std::cout<<"search1s "<<uci(m)<<" nodes="<<e.nodes<<" ms="<<ms<<" NPS="<<e.nps()<<"\n";}
+    Engine e;e.b.setFEN(Board::startFen());auto t=std::chrono::steady_clock::now();auto best=e.think(90,3000);auto ms=std::max<long long>(1,std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t).count());std::cout<<"sustained3s best="<<uci(best)<<" nodes="<<e.nodes<<" qnodes="<<e.qnodes<<" tt_hits="<<e.tthits<<" ms="<<ms<<" NPS="<<e.nps()<<"\n";
+}
+
+} // namespace EP
+
+int main(int argc,char**argv){EP::init();if(argc>1&&std::string(argv[1])=="divide"){EP::Board b;b.setFEN(EP::Board::startFen());b.divide(4);return 0;}if(argc>1&&std::string(argv[1])=="bench"){EP::bench();return 0;}EP::Engine e;std::string line;while(std::getline(std::cin,line)){std::stringstream ss(line);std::string cmd;ss>>cmd;if(cmd=="uci"){std::cout<<"id name EternalPhoenix Strong NNUE-ready 3000 Target\nid author EternalPhoenix\noption name Hash type spin default 512 min 16 max 4096\noption name MaxDepth type spin default 90 min 1 max 90\nuciok\n";}else if(cmd=="isready")std::cout<<"readyok\n";else if(cmd=="ucinewgame")e.clear();else if(cmd=="position"){std::vector<std::string>a;std::string x;while(ss>>x)a.push_back(x);size_t i=0;if(i<a.size()&&a[i]=="startpos"){e.b.setFEN(EP::Board::startFen());++i;}else if(i<a.size()&&a[i]=="fen"){std::string fen;for(int n=0;n<6&&i+1<a.size();n++){if(n)fen+=' ';fen+=a[++i];}e.b.setFEN(fen);++i;}if(i<a.size()&&a[i]=="moves"){for(++i;i<a.size();++i){auto mv=e.b.legal(false);bool ok=false;for(auto m:mv)if(EP::uci(m)==a[i]){e.b.make(m);ok=true;break;}if(!ok)break;}}}else if(cmd=="go"){int depth=90,ms=0;std::string k;int v;while(ss>>k){if(k=="depth"){ss>>v;depth=v;}else if(k=="movetime"){ss>>v;ms=v;}else if(k=="wtime"||k=="btime"){ss>>v;ms=std::max(ms,v/30);}else if(k=="maxdepth"){ss>>v;depth=v;}}auto m=e.think(depth,ms);std::cout<<"bestmove "<<EP::uci(m)<<"\n";}else if(cmd=="quit")break;std::cout.flush();}
+}

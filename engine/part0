@@ -1,0 +1,136 @@
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <random>
+#include <sstream>
+#include <string>
+#include <vector>
+#ifdef __BMI2__
+#include <immintrin.h>
+#endif
+
+using U64 = uint64_t;
+using U32 = uint32_t;
+using i64 = int64_t;
+
+namespace EP {
+constexpr int WHITE=0, BLACK=1, NO_COLOR=2;
+constexpr int PAWN=0, KNIGHT=1, BISHOP=2, ROOK=3, QUEEN=4, KING=5;
+constexpr int EMPTY=12;
+constexpr int INF=32000, MATE=30000, MAX_PLY=128;
+constexpr int MAX_MOVES=256;
+constexpr U64 FILE_A=0x0101010101010101ULL;
+constexpr U64 FILE_H=0x8080808080808080ULL;
+constexpr U64 NOT_A=~FILE_A, NOT_H=~FILE_H, RANK_1=0xFFULL, RANK_8=0xFF00000000000000ULL;
+
+enum MoveFlag : int { MF_NONE=0, MF_EP=1, MF_CASTLE=2, MF_PAWN2=4 };
+
+inline int piece(int c,int t){return c*6+t;}
+inline int colorOf(int p){return p==EMPTY?NO_COLOR:p/6;}
+inline int typeOf(int p){return p%6;}
+inline int poplsb(U64 &b){int s=__builtin_ctzll(b); b&=b-1; return s;}
+inline U64 bb(int s){return 1ULL<<s;}
+inline int rankOf(int s){return s>>3;}
+inline int fileOf(int s){return s&7;}
+inline std::string sqName(int s){std::string r; r.push_back(char('a'+(s&7))); r.push_back(char('1'+(s>>3))); return r;}
+
+inline U64 north(U64 x){return x<<8;}
+inline U64 south(U64 x){return x>>8;}
+inline U64 east(U64 x){return (x&NOT_H)<<1;}
+inline U64 west(U64 x){return (x&NOT_A)>>1;}
+
+struct Tables {
+    U64 knight[64]{}, king[64]{}, pawnAtk[2][64]{};
+    U64 rookMask[64]{}, bishopMask[64]{};
+    std::vector<U64> rookTable, bishopTable;
+    int rookOff[64]{}, bishopOff[64]{};
+    int rookBits[64]{}, bishopBits[64]{};
+
+    static U64 maskRook(int s){
+        U64 m=0; int f=fileOf(s),r=rankOf(s);
+        for(int rr=r+1;rr<=6;rr++) m|=bb(rr*8+f);
+        for(int rr=r-1;rr>=1;rr--) m|=bb(rr*8+f);
+        for(int ff=f+1;ff<=6;ff++) m|=bb(r*8+ff);
+        for(int ff=f-1;ff>=1;ff--) m|=bb(r*8+ff);
+        return m;
+    }
+    static U64 maskBishop(int s){
+        U64 m=0; int f=fileOf(s),r=rankOf(s);
+        for(int ff=f+1,rr=r+1;ff<=6&&rr<=6;ff++,rr++)m|=bb(rr*8+ff);
+        for(int ff=f-1,rr=r+1;ff>=1&&rr<=6;ff--,rr++)m|=bb(rr*8+ff);
+        for(int ff=f+1,rr=r-1;ff<=6&&rr>=1;ff++,rr--)m|=bb(rr*8+ff);
+        for(int ff=f-1,rr=r-1;ff>=1&&rr>=1;ff--,rr--)m|=bb(rr*8+ff);
+        return m;
+    }
+    static U64 rookSlow(int s,U64 occ){
+        U64 a=0; int f=fileOf(s),r=rankOf(s);
+        for(int rr=r+1;rr<8;rr++){int x=rr*8+f;a|=bb(x);if(occ&bb(x))break;}
+        for(int rr=r-1;rr>=0;rr--){int x=rr*8+f;a|=bb(x);if(occ&bb(x))break;}
+        for(int ff=f+1;ff<8;ff++){int x=r*8+ff;a|=bb(x);if(occ&bb(x))break;}
+        for(int ff=f-1;ff>=0;ff--){int x=r*8+ff;a|=bb(x);if(occ&bb(x))break;}
+        return a;
+    }
+    static U64 bishopSlow(int s,U64 occ){
+        U64 a=0; int f=fileOf(s),r=rankOf(s);
+        for(int ff=f+1,rr=r+1;ff<8&&rr<8;ff++,rr++){int x=rr*8+ff;a|=bb(x);if(occ&bb(x))break;}
+        for(int ff=f-1,rr=r+1;ff>=0&&rr<8;ff--,rr++){int x=rr*8+ff;a|=bb(x);if(occ&bb(x))break;}
+        for(int ff=f+1,rr=r-1;ff<8&&rr>=0;ff++,rr--){int x=rr*8+ff;a|=bb(x);if(occ&bb(x))break;}
+        for(int ff=f-1,rr=r-1;ff>=0&&rr>=0;ff--,rr--){int x=rr*8+ff;a|=bb(x);if(occ&bb(x))break;}
+        return a;
+    }
+    static unsigned pextSoft(U64 x,U64 m){unsigned r=0,b=0;while(m){int s=poplsb(m);r|=((x>>s)&1ULL)<<b++;}return r;}
+    static unsigned pext(U64 x,U64 m){
+#ifdef __BMI2__
+        return (unsigned)_pext_u64(x,m);
+#else
+        return pextSoft(x,m);
+#endif
+    }
+    void init(){
+        for(int s=0;s<64;s++){
+            int f=fileOf(s),r=rankOf(s);
+            U64 k=0;
+            for(int df=-2;df<=2;df++)for(int dr=-2;dr<=2;dr++) if((df*df+dr*dr)==5){int ff=f+df,rr=r+dr;if(ff>=0&&ff<8&&rr>=0&&rr<8)k|=bb(rr*8+ff);} knight[s]=k;
+            k=0; for(int df=-1;df<=1;df++)for(int dr=-1;dr<=1;dr++)if(df||dr){int ff=f+df,rr=r+dr;if(ff>=0&&ff<8&&rr>=0&&rr<8)k|=bb(rr*8+ff);} king[s]=k;
+            U64 pw=0,pb=0;if(r<7){if(f>0)pw|=bb((r+1)*8+f-1);if(f<7)pw|=bb((r+1)*8+f+1);} if(r>0){if(f>0)pb|=bb((r-1)*8+f-1);if(f<7)pb|=bb((r-1)*8+f+1);} pawnAtk[WHITE][s]=pw;pawnAtk[BLACK][s]=pb;
+            rookMask[s]=maskRook(s);bishopMask[s]=maskBishop(s);
+            rookBits[s]=__builtin_popcountll(rookMask[s]); bishopBits[s]=__builtin_popcountll(bishopMask[s]);
+        }
+        int roTotal=0,biTotal=0;for(int s=0;s<64;s++){rookOff[s]=roTotal;roTotal+=1<<rookBits[s];bishopOff[s]=biTotal;biTotal+=1<<bishopBits[s];}
+        rookTable.resize(roTotal);bishopTable.resize(biTotal);
+        for(int s=0;s<64;s++){
+            U64 rm=rookMask[s]; U64 sub=rm; while(true){unsigned i=pext(sub,rm);rookTable[rookOff[s]+i]=rookSlow(s,sub);if(sub==0)break;sub=(sub-1)&rm;}
+            U64 bm=bishopMask[s]; sub=bm; while(true){unsigned i=pext(sub,bm);bishopTable[bishopOff[s]+i]=bishopSlow(s,sub);if(sub==0)break;sub=(sub-1)&bm;}
+        }
+    }
+    inline U64 rook(int s,U64 occ)const{return rookTable[rookOff[s]+pext(occ,rookMask[s])];}
+    inline U64 bishop(int s,U64 occ)const{return bishopTable[bishopOff[s]+pext(occ,bishopMask[s])];}
+} T;
+
+struct Zobrist { U64 ps[12][64]{},side,castle[16]{},ep[8]{}; void init(){std::mt19937_64 r(0xE7E7E7C0FFEE1234ULL);for(auto&a:ps)for(auto&v:a)v=r();side=r();for(auto&v:castle)v=r();for(auto&v:ep)v=r();}} Z;
+
+struct Move { uint32_t v=0; int score=0; };
+inline Move makeMove(int from,int to,int promo=0,int flags=0){return Move{uint32_t(from | to<<6 | promo<<12 | flags<<16),0};}
+inline int mvFrom(Move m){return m.v&63;} inline int mvTo(Move m){return (m.v>>6)&63;} inline int mvPromo(Move m){return (m.v>>12)&15;} inline int mvFlags(Move m){return (m.v>>16)&255;}
+inline bool sameMove(Move a,Move b){return (a.v&0xFFFF)==(b.v&0xFFFF);} 
+std::string uci(Move m){std::string s=sqName(mvFrom(m))+sqName(mvTo(m));int p=mvPromo(m);if(p){const char pc[5]={' ','n','b','r','q'};s.push_back(pc[p]);}return s;}
+
+struct Undo { Move m; int captured, capturedSq, castle, ep, half; U64 hash; };
+
+class Board {
+public:
+    U64 pieces[12]{}; U64 occ[2]{}, all=0; int side=WHITE, castle=15, ep=-1, half=0, full=1; std::array<uint8_t,64> mailbox{}; std::array<Undo,MAX_PLY> undo{}; int ply=0; U64 hkey=0;
+    static const std::string startFen(){return "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";}
+    void clear(){std::memset(pieces,0,sizeof(pieces));occ[0]=occ[1]=all=0;mailbox.fill(EMPTY);side=WHITE;castle=15;ep=-1;half=0;full=1;ply=0;hkey=0;}
+    static int fromChar(char c){switch(c){case'P':return piece(WHITE,PAWN);case'N':return piece(WHITE,KNIGHT);case'B':return piece(WHITE,BISHOP);case'R':return piece(WHITE,ROOK);case'Q':return piece(WHITE,QUEEN);case'K':return piece(WHITE,KING);case'p':return piece(BLACK,PAWN);case'n':return piece(BLACK,KNIGHT);case'b':return piece(BLACK,BISHOP);case'r':return piece(BLACK,ROOK);case'q':return piece(BLACK,QUEEN);case'k':return piece(BLACK,KING);}return EMPTY;}
+    void addPiece(int p,int s){pieces[p]|=bb(s);occ[p/6]|=bb(s);all|=bb(s);mailbox[s]=p;if(p!=EMPTY)hkey^=Z.ps[p][s];}
+    void removePiece(int p,int s){U64 z=~bb(s);pieces[p]&=z;occ[p/6]&=z;all&=z;mailbox[s]=EMPTY;if(p!=EMPTY)hkey^=Z.ps[p][s];}
+    void setFEN(const std::string& fen){clear();std::stringstream ss(fen);std::string a,b,c,d;int h=0,fm=1;ss>>a>>b>>c>>d>>h>>fm;int r=7,f=0;for(char ch:a){if(ch=='/'){--r;f=0;}else if(ch>='1'&&ch<='8')f+=ch-'0';else{addPiece(fromChar(ch),r*8+f);++f;}}side=(b=="b");castle=0;if(c!="-"){for(char x:c){if(x=='K')castle|=1;if(x=='Q')castle|=2;if(x=='k')castle|=4;if(x=='q')castle|=8;}}ep=-1;if(d!="-"&&d.size()>=2)ep=(d[0]-'a')+8*(d[1]-'1');half=h;full=fm;hkey=0;for(int p=0;p<12;p++){U64 x=pieces[p];while(x)hkey^=Z.ps[p][poplsb(x)];}hkey^=Z.castle[castle];if(side)hkey^=Z.side;if(ep>=0)hkey^=Z.ep[fileOf(ep)];}
+    U64 hash()const{return hkey;}
+    int kingSq(int c)const{U64 x=pieces[piece(c,KING)];return x?__builtin_ctzll(x):-1;}

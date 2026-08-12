@@ -1,0 +1,112 @@
+KING)];return x?__builtin_ctzll(x):-1;}
+    bool attacked(int s,int by)const{
+        if(T.pawnAtk[by^1][s] & pieces[piece(by,PAWN)]) return true;
+        if(T.knight[s] & pieces[piece(by,KNIGHT)]) return true;
+        if(T.king[s] & pieces[piece(by,KING)]) return true;
+        U64 bishops=pieces[piece(by,BISHOP)]|pieces[piece(by,QUEEN)]; if(T.bishop(s,all)&bishops)return true;
+        U64 rooks=pieces[piece(by,ROOK)]|pieces[piece(by,QUEEN)]; if(T.rook(s,all)&rooks)return true;
+        return false;
+    }
+    bool inCheck(int c)const{int k=kingSq(c);return k>=0&&attacked(k,c^1);}
+    void push(Move m){undo[ply++]={m,EMPTY,-1,castle,ep,half,hash()};}
+    void make(Move m){
+        int from=mvFrom(m),to=mvTo(m),fl=mvFlags(m),pr=mvPromo(m), p=mailbox[from];
+        Undo &u=undo[ply++];u.m=m;u.captured=EMPTY;u.capturedSq=to;u.castle=castle;u.ep=ep;u.half=half;u.hash=hkey;
+        hkey^=Z.castle[castle];if(ep>=0)hkey^=Z.ep[fileOf(ep)];
+        removePiece(p,from);
+        if(mailbox[to]!=EMPTY){u.captured=mailbox[to];removePiece(u.captured,to);}
+        if(fl&MF_EP){u.capturedSq=side==WHITE?to-8:to+8;u.captured=mailbox[u.capturedSq];removePiece(u.captured,u.capturedSq);}
+        int np=(pr?piece(side,pr-1):p); addPiece(np,to);
+        if(fl&MF_CASTLE){int rf=-1,rt=-1;if(to==6){rf=7;rt=5;}else if(to==2){rf=0;rt=3;}else if(to==62){rf=63;rt=61;}else if(to==58){rf=56;rt=59;}if(rf>=0&&mailbox[rf]!=EMPTY){int rp=mailbox[rf];removePiece(rp,rf);addPiece(rp,rt);}}
+        if(p==piece(WHITE,KING))castle&=~3;if(p==piece(BLACK,KING))castle&=~12;
+        if(from==0||to==0)castle&=~2;if(from==7||to==7)castle&=~1;if(from==56||to==56)castle&=~8;if(from==63||to==63)castle&=~4;
+        ep=-1;if((fl&MF_PAWN2))ep=side==WHITE?from+8:from-8;
+        if(typeOf(p)==PAWN||u.captured!=EMPTY)half=0;else++half;if(side==BLACK)++full;side^=1;hkey^=Z.side;hkey^=Z.castle[castle];if(ep>=0)hkey^=Z.ep[fileOf(ep)];
+    }
+    void unmake(){
+        Undo &u=undo[--ply];Move m=u.m;int from=mvFrom(m),to=mvTo(m),p=mailbox[to];
+        side^=1;
+        hkey=u.hash;
+        removePiece(p,to);
+        if(mvPromo(m))p=piece(side,PAWN);
+        addPiece(p,from);
+        if(u.captured!=EMPTY)addPiece(u.captured,u.capturedSq);
+        if(mvFlags(m)&MF_CASTLE){int rf=-1,rt=-1;if(to==6){rf=7;rt=5;}else if(to==2){rf=0;rt=3;}else if(to==62){rf=63;rt=61;}else if(to==58){rf=56;rt=59;}if(rf>=0&&mailbox[rt]!=EMPTY){int rp=mailbox[rt];removePiece(rp,rt);addPiece(rp,rf);}}
+        castle=u.castle;ep=u.ep;half=u.half;full-= (side==BLACK);hkey=u.hash;
+    }
+
+    template<class F> void gen(bool capturesOnly,F fn){
+        int c=side,oc=c^1;U64 own=occ[c],opp=occ[oc];
+        // pawns
+        U64 paw=pieces[piece(c,PAWN)];
+        while(paw){int s=poplsb(paw);int r=rankOf(s),f=fileOf(s);int dir=c==WHITE?8:-8;int to=s+dir;
+            if(!capturesOnly && to>=0&&to<64&&!(all&bb(to))){if((c==WHITE&&r==6)||(c==BLACK&&r==1)){for(int pr=KNIGHT;pr<=QUEEN;pr++)fn(makeMove(s,to,pr+1));}else{fn(makeMove(s,to));if((c==WHITE&&r==1)||(c==BLACK&&r==6)){int to2=s+2*dir;if(!(all&bb(to2)))fn(makeMove(s,to2,0,MF_PAWN2));}}}
+            U64 at=T.pawnAtk[c][s]&opp;while(at){int t=poplsb(at);if((c==WHITE&&rankOf(t)==7)||(c==BLACK&&rankOf(t)==0)){for(int pr=KNIGHT;pr<=QUEEN;pr++)fn(makeMove(s,t,pr+1));}else fn(makeMove(s,t));}
+            if(ep>=0&&(T.pawnAtk[c][s]&bb(ep)))fn(makeMove(s,ep,0,MF_EP));
+        }
+        auto piecesMoves=[&](int pt,U64 attacksMask){U64 x=pieces[piece(c,pt)];while(x){int s=poplsb(x);U64 a=attacksMask; if(pt==KNIGHT)a=T.knight[s]; else if(pt==BISHOP)a=T.bishop(s,all); else if(pt==ROOK)a=T.rook(s,all); else if(pt==QUEEN)a=T.bishop(s,all)|T.rook(s,all); else a=T.king[s];a&=~own;if(capturesOnly)a&=opp;while(a){int t=poplsb(a);fn(makeMove(s,t));}}};
+        piecesMoves(KNIGHT,0);piecesMoves(BISHOP,0);piecesMoves(ROOK,0);piecesMoves(QUEEN,0);piecesMoves(KING,0);
+        if(!capturesOnly && !inCheck(c)){
+            if(c==WHITE){if((castle&1)&&!(all&(bb(5)|bb(6)))&&!attacked(5,BLACK)&&!attacked(6,BLACK))fn(makeMove(4,6,0,MF_CASTLE));if((castle&2)&&!(all&(bb(1)|bb(2)|bb(3)))&&!attacked(3,BLACK)&&!attacked(2,BLACK))fn(makeMove(4,2,0,MF_CASTLE));}
+            else {if((castle&4)&&!(all&(bb(61)|bb(62)))&&!attacked(61,WHITE)&&!attacked(62,WHITE))fn(makeMove(60,62,0,MF_CASTLE));if((castle&8)&&!(all&(bb(57)|bb(58)|bb(59)))&&!attacked(59,WHITE)&&!attacked(58,WHITE))fn(makeMove(60,58,0,MF_CASTLE));}
+        }
+    }
+    std::vector<Move> legal(bool capsOnly=false){std::vector<Move> out;out.reserve(64);gen(capsOnly,[&](Move m){int c=side;make(m);if(!inCheck(c))out.push_back(m);unmake();});return out;}
+    uint64_t perft(int d){if(d==0)return 1;uint64_t n=0;gen(false,[&](Move m){int c=side;make(m);if(!inCheck(c))n+=perft(d-1);unmake();});return n;}
+    void divide(int d){std::vector<std::pair<std::string,uint64_t>> v;gen(false,[&](Move m){int c=side;make(m);uint64_t n=!inCheck(c)?perft(d-1):0;unmake();v.push_back({uci(m),n});});for(auto &x:v)std::cout<<x.first<<" "<<x.second<<"\n";}
+};
+
+struct TTEntry {U64 key=0;int16_t score=0;int8_t depth=-1;uint8_t bound=0;uint32_t move=0;};
+class Engine {
+public:
+    Board b; static constexpr size_t TT_BITS=20, TT_SIZE=1ULL<<TT_BITS; std::vector<std::array<TTEntry,4>> tt; uint64_t nodes=0,qnodes=0; uint64_t tthits=0; bool stop=false; std::chrono::steady_clock::time_point t0; int timeMs=0,maxDepth=90; std::array<std::array<uint32_t,2>,MAX_PLY> killers{}; int history[2][64][64]{}; int countermove[64][64]{};
+    Engine():tt(TT_SIZE){}
+    void clear(){std::fill(tt.begin(),tt.end(),std::array<TTEntry,4>{});std::memset(history,0,sizeof(history));for(auto &k:killers) k={0,0};std::memset(countermove,0,sizeof(countermove));}
+    // History with gravity-style updates: rapid learning, bounded values.
+    inline void updateHistory(int &h, int bonus) {
+        bonus = std::clamp(bonus, -MAX_HISTORY, MAX_HISTORY);
+        h += bonus - h * std::abs(bonus) / MAX_HISTORY;
+    }
+    static constexpr int MAX_HISTORY = 16384;
+
+    // Static Exchange Evaluation. This is deliberately allocation-free and uses
+    // the current board plus a small local occupancy/piece-bitboard state.
+    int see(Move m) const {
+        const int from = mvFrom(m), to = mvTo(m);
+        int mover = b.mailbox[from];
+        int victim = b.mailbox[to];
+        if (mvFlags(m) & MF_EP) victim = piece(b.side ^ 1, PAWN);
+        if (victim == EMPTY && !mvPromo(m)) return 0;
+        int gain[32], d = 0;
+        gain[0] = victim == EMPTY ? 0 : pieceVal[typeOf(victim)];
+        int promoGain = mvPromo(m) ? pieceVal[mvPromo(m)-1] - pieceVal[PAWN] : 0;
+        gain[0] += promoGain;
+
+        U64 pc[12]; std::memcpy(pc, b.pieces, sizeof(pc));
+        U64 occ = b.all;
+        const int capSq = (mvFlags(m) & MF_EP) ? (b.side == WHITE ? to - 8 : to + 8) : to;
+        pc[mover] ^= bb(from);
+        occ ^= bb(from);
+        if (victim != EMPTY) { pc[victim] ^= bb(capSq); occ ^= bb(capSq); }
+        int side = b.side;
+        int movingPiece = mvPromo(m) ? piece(side, mvPromo(m)-1) : mover;
+        pc[movingPiece] |= bb(to);
+        occ |= bb(to);
+
+        auto attackersTo = [&](int sq, int c, U64 o) {
+            U64 a = 0;
+            a |= T.pawnAtk[c ^ 1][sq] & pc[piece(c, PAWN)];
+            a |= T.knight[sq] & pc[piece(c, KNIGHT)];
+            a |= T.king[sq] & pc[piece(c, KING)];
+            a |= T.bishop(sq, o) & (pc[piece(c, BISHOP)] | pc[piece(c, QUEEN)]);
+            a |= T.rook(sq, o) & (pc[piece(c, ROOK)] | pc[piece(c, QUEEN)]);
+            return a;
+        };
+        int capturedValue = pieceVal[typeOf(movingPiece)];
+        while (d < 30) {
+            side ^= 1;
+            U64 at = attackersTo(to, side, occ);
+            if (!at) break;
+            int bestSq = -1, bestType = KING, bestVal = std::numeric_limits<int>::max();
+            for (int t = PAWN; t <= KING; ++t) {
+                U64 x = at & pc

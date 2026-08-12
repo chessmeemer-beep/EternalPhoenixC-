@@ -1,0 +1,51 @@
+name: EternalPhoenix vs Stockfish
+
+on:
+  push:
+    branches: [ main, benchmark ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct EternalPhoenix source
+        shell: bash
+        run: |
+          cat engine/part0 engine/part1 engine/part23 > EternalPhoenix.cpp
+          wc -c EternalPhoenix.cpp
+
+      - name: Build EternalPhoenix
+        run: |
+          g++ -O3 -std=c++17 -march=native -pthread EternalPhoenix.cpp -o EternalPhoenix
+          ./EternalPhoenix bench 2>&1 | tee local-benchmark.txt
+
+      - name: Build Stockfish
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/official-stockfish/Stockfish.git stockfish
+          make -C stockfish -j2 build ARCH=x86-64
+          ./stockfish/src/stockfish <<'EOF'
+          uci
+          isready
+          quit
+          EOF
+
+      - name: Engine match
+        run: |
+          python3 tools/match.py ./EternalPhoenix ./stockfish/src/stockfish | tee match-results.txt
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: eternalphoenix-benchmark
+          path: |
+            local-benchmark.txt
+            match-results.txt
+            games.pgn
