@@ -19,6 +19,16 @@ jobs:
         shell: bash
         run: |
           cat engine/part0 engine/part1 engine/part23 > EternalPhoenix.cpp
+          python3 - <<'PY'
+          p='EternalPhoenix.cpp'
+          s=open(p, encoding='utf-8').read()
+          dup='KING)];return x?__builtin_ctzll(x):-1;}'
+          n=s.count(dup)
+          if n != 1:
+              raise SystemExit(f'expected exactly one duplicate fragment, found {n}')
+          s=s.replace(dup+'\n', '', 1)
+          open(p,'w',encoding='utf-8').write(s)
+          PY
           wc -c EternalPhoenix.cpp
 
       - name: Build EternalPhoenix
