@@ -23,10 +23,11 @@ jobs:
           p='EternalPhoenix.cpp'
           s=open(p, encoding='utf-8').read()
           dup='KING)];return x?__builtin_ctzll(x):-1;}'
-          n=s.count(dup)
-          if n != 1:
-              raise SystemExit(f'expected exactly one duplicate fragment, found {n}')
-          s=s.replace(dup+'\n', '', 1)
+          hits=[i for i in range(len(s)) if s.startswith(dup, i)]
+          if len(hits) != 2:
+              raise SystemExit(f'expected 2 occurrences of split boundary, found {len(hits)}')
+          i=hits[-1]
+          s=s[:i]+s[i+len(dup):]
           open(p,'w',encoding='utf-8').write(s)
           PY
           wc -c EternalPhoenix.cpp
