@@ -1,0 +1,27 @@
+name: EternalPhoenix diagnostic
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct source
+        run: cat engine/part0 engine/part1 engine/part23 > EternalPhoenix.cpp
+      - name: Compile with diagnostics
+        shell: bash
+        run: |
+          set +e
+          g++ -O3 -std=c++17 -march=native -pthread EternalPhoenix.cpp -o EternalPhoenix >compile.log 2>&1
+          rc=$?
+          cat compile.log
+          exit $rc
+      - name: Upload compile log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-diagnostics
+          path: compile.log
