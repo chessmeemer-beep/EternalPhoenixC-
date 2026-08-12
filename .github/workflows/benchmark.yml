@@ -11,13 +11,24 @@ permissions:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install match dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade python-chess
+          python3 - <<'PY'
+          import chess
+          print('python-chess', chess.__version__)
+          PY
 
       - name: Reconstruct EternalPhoenix source
         shell: bash
         run: |
+          set -euo pipefail
           cat engine/part0 engine/part1 engine/part23 > EternalPhoenix.cpp
           python3 - <<'PY'
           p='EternalPhoenix.cpp'
@@ -33,13 +44,16 @@ jobs:
           wc -c EternalPhoenix.cpp
 
       - name: Build EternalPhoenix
+        shell: bash
         run: |
+          set -euo pipefail
           g++ -O3 -std=c++17 -march=native -pthread EternalPhoenix.cpp -o EternalPhoenix
           ./EternalPhoenix bench 2>&1 | tee local-benchmark.txt
 
       - name: Build Stockfish
         shell: bash
         run: |
+          set -euo pipefail
           git clone --depth 1 https://github.com/official-stockfish/Stockfish.git stockfish
           make -C stockfish/src -j2 build ARCH=x86-64
           ./stockfish/src/stockfish <<'EOF'
@@ -49,10 +63,16 @@ jobs:
           EOF
 
       - name: Engine match
+        shell: bash
         run: |
-          python3 tools/match.py ./EternalPhoenix ./stockfish/src/stockfish | tee match-results.txt
+          set -euo pipefail
+          python3 -u tools/match.py ./EternalPhoenix ./stockfish/src/stockfish | tee match-results.txt
+          test -s match-results.txt
+          grep -q '^SUMMARY ' match-results.txt
+          test -s games.pgn
 
       - name: Upload benchmark artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: eternalphoenix-benchmark
