@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           git clone --depth 1 https://github.com/official-stockfish/Stockfish.git stockfish
-          make -C stockfish -j2 build ARCH=x86-64
+          make -C stockfish/src -j2 build ARCH=x86-64
           ./stockfish/src/stockfish <<'EOF'
           uci
           isready
